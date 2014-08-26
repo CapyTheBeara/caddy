@@ -13,7 +13,7 @@ func main() {
 
 	println("Running...")
 
-	if os.Args[1] == "gotest" {
+	if len(os.Args) == 1 {
 		gotest.Run()
 	} else {
 		c := plugin.NewPlugin(os.Args[1:])

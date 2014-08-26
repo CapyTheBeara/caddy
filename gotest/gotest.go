@@ -16,6 +16,7 @@ var timeout = time.Second * 5
 func Run() {
 	w := watcher.NewWatcher(&watcher.Config{
 		Dir:         ".",
+		ExcludeDirs: []string{".git"},
 		IgnoreModes: []string{"chmod"},
 	})
 

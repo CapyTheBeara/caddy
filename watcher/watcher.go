@@ -23,12 +23,12 @@ func NewWatcher(c *Config) *Watcher {
 	}
 
 	w := Watcher{
-		Config: *c,
-		Ready:  make(chan bool),
-		Events: make(chan fsnotify.Event),
-		Errors: make(chan error),
-		fsw:    fsw,
-		events: make(map[string]time.Time),
+		Watcher: fsw,
+		Config:  *c,
+		Ready:   make(chan bool),
+		Events:  make(chan fsnotify.Event),
+		Errors:  make(chan error),
+		events:  make(map[string]time.Time),
 	}
 
 	w.watchDir()
@@ -41,16 +41,17 @@ type Config struct {
 	Dir, Ext    string
 	FileNames   []string
 	IgnoreModes []string
+	ExcludeDirs []string
 	EventCutoff float64
 }
 
 type Watcher struct {
+	*fsnotify.Watcher
 	Config
 	IgnoreEvents bool
 	Ready        chan bool
 	Events       chan fsnotify.Event
 	Errors       chan error
-	fsw          *fsnotify.Watcher
 	events       map[string]time.Time
 }
 
@@ -62,7 +63,18 @@ func (w *Watcher) watchDir() {
 			}
 
 			if info.IsDir() {
-				w.fsw.Add(path)
+				hit := false
+				for _, d := range w.ExcludeDirs {
+					dir := filepath.Join(w.Dir, d)
+					if strings.HasPrefix(path, dir) {
+						hit = true
+						break
+					}
+				}
+
+				if !hit {
+					w.Add(path)
+				}
 			}
 			return nil
 		})
@@ -71,7 +83,7 @@ func (w *Watcher) watchDir() {
 
 	for _, file := range w.FileNames {
 		path := filepath.Join(w.Dir, file)
-		err := w.fsw.Add(filepath.Dir(path))
+		err := w.Add(filepath.Dir(path))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -83,7 +95,7 @@ func (w *Watcher) listen() {
 
 	for {
 		select {
-		case e := <-w.fsw.Events:
+		case e := <-w.Watcher.Events:
 			if w.isDuplicateEvent(e) {
 				continue
 			}
@@ -94,7 +106,7 @@ func (w *Watcher) listen() {
 
 			if w.isNewDir(e) {
 				if len(w.FileNames) == 0 {
-					w.fsw.Add(e.Name)
+					w.Add(e.Name)
 				}
 				continue
 			}
@@ -104,7 +116,7 @@ func (w *Watcher) listen() {
 					w.Events <- e
 				}()
 			}
-		case err := <-w.fsw.Errors:
+		case err := <-w.Watcher.Errors:
 			go func() {
 				w.Errors <- err
 			}()

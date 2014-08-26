@@ -15,7 +15,7 @@ func TestNewWatcher(t *testing.T) {
 	Convey("Given a dir with files", t, func() {
 		dir := "tmp1"
 		utils.RemoveDir(t, dir)
-		utils.MakeDir(t, dir+"/foo/1")
+		utils.MakeDir(t, dir+"/foo/1/x/y")
 		utils.MakeDir(t, dir+"/bar")
 		utils.MakeFile(t, dir, "foo/index.js", "var foo;\n", 0)
 		utils.MakeFile(t, dir, "bar/main.js", "1", 0)
@@ -51,7 +51,8 @@ func TestNewWatcher(t *testing.T) {
 			defer utils.RemoveDir(t, dir)
 
 			w := NewWatcher(&Config{
-				Dir: dir + "/foo",
+				Dir:         dir + "/foo",
+				ExcludeDirs: []string{"1/x"},
 			})
 			<-w.Ready
 
@@ -82,6 +83,16 @@ func TestNewWatcher(t *testing.T) {
 			utils.MakeFile(t, dir, "foo/1/2/2.js", "1", 0)
 			e = <-w.Events
 			So(e.Name, ShouldEqual, "tmp1/foo/1/2/2.js")
+
+			// test exluded dir is not watched
+			utils.MakeFile(t, dir, "foo/1/x/y/1.js", "1", 0)
+			time.Sleep(time.Millisecond * 20)
+			select {
+			case <-w.Events:
+				So("Failed - Dir should not be observed", ShouldBeNil)
+			default:
+				So("Passed - Dir not observed", ShouldNotBeBlank)
+			}
 		})
 
 		Convey("A dir + ext watcher will detect relavent file changes", func() {
@@ -124,7 +135,7 @@ func TestNewWatcher(t *testing.T) {
 			})
 			<-w.Ready
 
-			w.fsw.Errors <- errors.New("foo")
+			w.Watcher.Errors <- errors.New("foo")
 			err := <-w.Errors
 			So(err.Error(), ShouldEqual, "foo")
 		})
@@ -139,7 +150,7 @@ func TestNewWatcher(t *testing.T) {
 			<-w.Ready
 
 			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
-			w.fsw.Events <- evt
+			w.Watcher.Events <- evt
 			time.Sleep(time.Millisecond * 20)
 
 			select {
@@ -160,7 +171,7 @@ func TestNewWatcher(t *testing.T) {
 			<-w.Ready
 
 			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
-			w.fsw.Events <- evt
+			w.Watcher.Events <- evt
 			time.Sleep(time.Millisecond * 20)
 
 			select {
@@ -192,10 +203,10 @@ func TestEventTiming(t *testing.T) {
 			evt2 := fsnotify.Event{Name: dir + "/main.js", Op: fsnotify.Rename}
 			evt3 := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
 
-			w.fsw.Events <- evt
-			w.fsw.Events <- evt2
-			w.fsw.Events <- evt
-			w.fsw.Events <- evt3
+			w.Watcher.Events <- evt
+			w.Watcher.Events <- evt2
+			w.Watcher.Events <- evt
+			w.Watcher.Events <- evt3
 
 			e := <-w.Events
 			So(e.Name, ShouldEqual, dir+"/index.js")
@@ -220,10 +231,10 @@ func TestEventTiming(t *testing.T) {
 			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Rename}
 			evt2 := fsnotify.Event{Name: dir + "/main.js", Op: fsnotify.Rename}
 
-			w.fsw.Events <- evt
-			w.fsw.Events <- evt2
+			w.Watcher.Events <- evt
+			w.Watcher.Events <- evt2
 			time.Sleep(time.Millisecond * 100)
-			w.fsw.Events <- evt
+			w.Watcher.Events <- evt
 
 			e := <-w.Events
 			So(e.Name, ShouldEqual, dir+"/index.js")
