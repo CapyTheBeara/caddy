@@ -38,6 +38,7 @@ func TestNewWatcher(t *testing.T) {
 			So(e.Name, ShouldEqual, "tmp1/bar/main.js")
 
 			utils.UpdateFile(t, "tmp1/foo/nope.foo", "s")
+			time.Sleep(time.Millisecond * 20)
 			select {
 			case <-w.Events:
 				So("Failed - Wrong file received", ShouldBeNil)
@@ -63,6 +64,7 @@ func TestNewWatcher(t *testing.T) {
 			So(e.Name, ShouldEqual, "tmp1/foo/nope.foo")
 
 			utils.UpdateFile(t, "tmp1/bar/main.js", "s")
+			time.Sleep(time.Millisecond * 20)
 			select {
 			case <-w.Events:
 				So("Failed - Wrong file received", ShouldBeNil)
@@ -96,6 +98,7 @@ func TestNewWatcher(t *testing.T) {
 			So(e.Name, ShouldEqual, "tmp1/foo/index.js")
 
 			utils.UpdateFile(t, "tmp1/foo/nope.foo", "s")
+			time.Sleep(time.Millisecond * 20)
 			select {
 			case <-w.Events:
 				So("Failed - Wrong file received", ShouldBeNil)
@@ -104,6 +107,7 @@ func TestNewWatcher(t *testing.T) {
 			}
 
 			utils.UpdateFile(t, "tmp1/bar/main.js", "s")
+			time.Sleep(time.Millisecond * 20)
 			select {
 			case <-w.Events:
 				So("Failed - Wrong file received", ShouldBeNil)
@@ -124,6 +128,49 @@ func TestNewWatcher(t *testing.T) {
 			err := <-w.Errors
 			So(err.Error(), ShouldEqual, "foo")
 		})
+
+		Convey("A watcher can ignore specified file modes", func() {
+			defer utils.RemoveDir(t, dir)
+
+			w := NewWatcher(&Config{
+				Dir:         dir,
+				IgnoreModes: []string{"chmod"},
+			})
+			<-w.Ready
+
+			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
+			w.fsw.Events <- evt
+			time.Sleep(time.Millisecond * 20)
+
+			select {
+			case <-w.Events:
+				So("Fails - shouldn't process the second event", ShouldBeNil)
+			default:
+				So("Passes - second event is not processed", ShouldNotBeBlank)
+			}
+		})
+
+		Convey("Events can be ignored via a toggle", func() {
+			defer utils.RemoveDir(t, dir)
+
+			w := NewWatcher(&Config{
+				Dir: dir,
+			})
+			w.IgnoreEvents = true
+			<-w.Ready
+
+			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
+			w.fsw.Events <- evt
+			time.Sleep(time.Millisecond * 20)
+
+			select {
+			case <-w.Events:
+				So("Fails - shouldn't process the event", ShouldBeNil)
+			default:
+				So("Passes - event is not processed", ShouldNotBeBlank)
+			}
+
+		})
 	})
 }
 
@@ -143,25 +190,23 @@ func TestEventTiming(t *testing.T) {
 
 			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Rename}
 			evt2 := fsnotify.Event{Name: dir + "/main.js", Op: fsnotify.Rename}
+			evt3 := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
 
 			w.fsw.Events <- evt
 			w.fsw.Events <- evt2
 			w.fsw.Events <- evt
+			w.fsw.Events <- evt3
 
 			e := <-w.Events
 			So(e.Name, ShouldEqual, dir+"/index.js")
+			So(e.Op, ShouldEqual, fsnotify.Rename)
 
 			e = <-w.Events
 			So(e.Name, ShouldEqual, dir+"/main.js")
 
-			time.Sleep(time.Millisecond * 20)
-
-			select {
-			case <-w.Events:
-				So("Fails - shouldn't process the second event", ShouldBeNil)
-			default:
-				So("Passes - second event is not processed", ShouldNotBeBlank)
-			}
+			e = <-w.Events
+			So(e.Name, ShouldEqual, dir+"/index.js")
+			So(e.Op, ShouldEqual, fsnotify.Chmod)
 		})
 
 		Convey("Multple identical events > 100ms apart are considered separate", func() {

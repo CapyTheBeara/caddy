@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/fsnotify.v1"
@@ -39,16 +40,18 @@ func NewWatcher(c *Config) *Watcher {
 type Config struct {
 	Dir, Ext    string
 	FileNames   []string
+	IgnoreModes []string
 	EventCutoff float64
 }
 
 type Watcher struct {
 	Config
-	Ready  chan bool
-	Events chan fsnotify.Event
-	Errors chan error
-	fsw    *fsnotify.Watcher
-	events map[string]time.Time
+	IgnoreEvents bool
+	Ready        chan bool
+	Events       chan fsnotify.Event
+	Errors       chan error
+	fsw          *fsnotify.Watcher
+	events       map[string]time.Time
 }
 
 func (w *Watcher) watchDir() {
@@ -82,6 +85,10 @@ func (w *Watcher) listen() {
 		select {
 		case e := <-w.fsw.Events:
 			if w.isDuplicateEvent(e) {
+				continue
+			}
+
+			if w.shouldIgnore(e) {
 				continue
 			}
 
@@ -119,6 +126,23 @@ func (w *Watcher) isNewDir(e fsnotify.Event) bool {
 	return false
 }
 
+func (w *Watcher) shouldIgnore(e fsnotify.Event) bool {
+	if w.IgnoreEvents {
+		return true
+	}
+
+	if len(w.IgnoreModes) == 0 {
+		return false
+	}
+
+	for _, field := range w.IgnoreModes {
+		if strings.Contains(e.String(), strings.ToTitle(field)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *Watcher) isWatching(e fsnotify.Event) bool {
 	if len(w.FileNames) == 0 {
 		if w.Ext == "" {
@@ -138,8 +162,8 @@ func (w *Watcher) isWatching(e fsnotify.Event) bool {
 
 func (w *Watcher) isDuplicateEvent(e fsnotify.Event) bool {
 	now := time.Now()
-	prev := w.events[e.Name]
+	prev := w.events[e.String()]
 	ignore := prev != zeroTime && now.Sub(prev).Seconds() < w.EventCutoff
-	w.events[e.Name] = now
+	w.events[e.String()] = now
 	return ignore
 }
