@@ -144,9 +144,9 @@ func TestNewWatcher(t *testing.T) {
 
 			select {
 			case <-w.Events:
-				So("Fails - shouldn't process the second event", ShouldBeNil)
+				So("Fails - shouldn't get an event", ShouldBeNil)
 			default:
-				So("Passes - second event is not processed", ShouldNotBeBlank)
+				So("Passes - no event processed", ShouldNotBeBlank)
 			}
 		})
 
