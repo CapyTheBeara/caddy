@@ -16,8 +16,7 @@ func main() {
 	goWatcher := watcher.NewWatcher(&watcher.Config{
 		Dir:         ".",
 		Ext:         "go",
-		ExcludeDirs: []string{".git"},
-		IgnoreModes: []string{"chmod"},
+		ExcludeDirs: []string{".git", "tmp*", "node_module*"},
 	})
 
 	gotestTask := gotest.NewTask(goWatcher, &task.Opts{
@@ -28,8 +27,7 @@ func main() {
 	jsWatcher := watcher.NewWatcher(&watcher.Config{
 		Dir:         ".",
 		Ext:         "js",
-		ExcludeDirs: []string{".git"},
-		IgnoreModes: []string{"chmod"},
+		ExcludeDirs: []string{".git", "tmp*", "node_module*"},
 	})
 
 	jshintTask := task.NewSimpleTask(&task.Opts{

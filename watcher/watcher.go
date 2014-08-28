@@ -30,6 +30,10 @@ func NewWatcher(c *Config) *Watcher {
 		c.EventCutoff = 0.01
 	}
 
+	if len(c.IgnoreModes) == 0 {
+		c.IgnoreModes = []string{"chmod"}
+	}
+
 	w := Watcher{
 		Watcher: fsw,
 		Config:  *c,
@@ -39,7 +43,7 @@ func NewWatcher(c *Config) *Watcher {
 		events:  make(map[string]time.Time),
 	}
 
-	w.watchDir()
+	w.watchDirs()
 	go w.listen()
 
 	return &w
@@ -65,19 +69,34 @@ type Watcher struct {
 
 func (w *Watcher) IsWatchingDir(dir string) bool {
 	for _, excl := range w.ExcludeDirs {
-		abs, err := filepath.Abs(filepath.Join(w.Dir, excl))
+		abs, err := filepath.Abs(dir)
 		if err != nil {
 			log.Println("[error] Unable to get absolute path", err)
 			return false
 		}
-		if dir == abs {
+
+		if strings.Contains(excl, "*") {
+			substr := strings.Replace(excl, "*", "", -1)
+
+			if strings.Contains(abs, substr) {
+				return false
+			}
+		}
+
+		absExcl, err := filepath.Abs(filepath.Join(w.Dir, excl))
+		if err != nil {
+			log.Println("[error] Unable to get absolute path", err)
+			return false
+		}
+
+		if strings.HasPrefix(abs, absExcl) {
 			return false
 		}
 	}
 	return true
 }
 
-func (w *Watcher) watchDir() {
+func (w *Watcher) watchDirs() {
 	if len(w.FileNames) == 0 {
 		filepath.Walk(w.Dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -85,21 +104,13 @@ func (w *Watcher) watchDir() {
 			}
 
 			if info.IsDir() {
-
-				hit := false
-				for _, d := range w.ExcludeDirs {
-					dir := filepath.Join(w.Dir, d)
-					if strings.HasPrefix(path, dir) {
-						hit = true
-						return filepath.SkipDir
-					}
-				}
-
-				if !hit {
+				if w.IsWatchingDir(path) {
 					w.Add(path)
+				} else {
+					return filepath.SkipDir
 				}
 			}
-			return nil
+			return err
 		})
 		return
 	}
@@ -123,16 +134,12 @@ func (w *Watcher) listen() {
 			/////////////////////////////
 			// log.Println(e)
 
-			if w.isDuplicateEvent(e) {
-				continue
-			}
-
-			if w.shouldIgnore(e) {
+			if w.isDuplicateEvent(e) || w.shouldIgnore(e) {
 				continue
 			}
 
 			if w.isNewDir(e) {
-				if len(w.FileNames) == 0 {
+				if len(w.FileNames) == 0 && w.IsWatchingDir(e.Name) {
 					w.Add(e.Name)
 				}
 				continue
@@ -151,18 +158,12 @@ func (w *Watcher) listen() {
 	}
 }
 
-func (w *Watcher) isNewDir(e fsnotify.Event) bool {
-	if e.Op == fsnotify.Create {
-		fi, err := os.Stat(e.Name)
-		if err != nil {
-			log.Fatal("[error] Unable to get file info:", err)
-		}
-
-		if fi.IsDir() {
-			return true
-		}
-	}
-	return false
+func (w *Watcher) isDuplicateEvent(e fsnotify.Event) bool {
+	now := time.Now()
+	prev := w.events[e.String()]
+	ignore := prev != zeroTime && now.Sub(prev).Seconds() < w.EventCutoff
+	w.events[e.String()] = now
+	return ignore
 }
 
 func (w *Watcher) shouldIgnore(e fsnotify.Event) bool {
@@ -176,6 +177,20 @@ func (w *Watcher) shouldIgnore(e fsnotify.Event) bool {
 
 	for _, field := range w.IgnoreModes {
 		if e.Op == mapStringOp[field] {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *Watcher) isNewDir(e fsnotify.Event) bool {
+	if e.Op == fsnotify.Create {
+		fi, err := os.Stat(e.Name)
+		if err != nil {
+			log.Fatal("[error] Unable to get file info:", err)
+		}
+
+		if fi.IsDir() {
 			return true
 		}
 	}
@@ -197,12 +212,4 @@ func (w *Watcher) isWatchingEvent(e fsnotify.Event) bool {
 		}
 	}
 	return false
-}
-
-func (w *Watcher) isDuplicateEvent(e fsnotify.Event) bool {
-	now := time.Now()
-	prev := w.events[e.String()]
-	ignore := prev != zeroTime && now.Sub(prev).Seconds() < w.EventCutoff
-	w.events[e.String()] = now
-	return ignore
 }

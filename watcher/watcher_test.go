@@ -16,6 +16,7 @@ func TestNewWatcher(t *testing.T) {
 		dir := "tmp1"
 		utils.RemoveDir(t, dir)
 		utils.MakeDir(t, dir+"/foo/1/x/y")
+		utils.MakeDir(t, dir+"/foo/wildonez")
 		utils.MakeDir(t, dir+"/bar")
 		utils.MakeFile(t, dir, "foo/index.js", "var foo;\n", 0)
 		utils.MakeFile(t, dir, "bar/main.js", "1", 0)
@@ -52,7 +53,7 @@ func TestNewWatcher(t *testing.T) {
 
 			w := NewWatcher(&Config{
 				Dir:         dir + "/foo",
-				ExcludeDirs: []string{"1/x"},
+				ExcludeDirs: []string{"1/x", "blarg*", "wild*"},
 			})
 			<-w.Ready
 
@@ -85,8 +86,26 @@ func TestNewWatcher(t *testing.T) {
 			So(e.Name, ShouldEqual, "tmp1/foo/1/2/2.js")
 
 			// test exluded dir is not watched
-			utils.MakeFile(t, dir, "foo/1/x/y/1.js", "1", 0)
-			time.Sleep(time.Millisecond * 20)
+			utils.MakeFile(t, dir, "foo/1/x/y/1.js", "1", 20)
+			select {
+			case <-w.Events:
+				So("Failed - Dir should not be observed", ShouldBeNil)
+			default:
+				So("Passed - Dir not observed", ShouldNotBeBlank)
+			}
+
+			// test excluded wildcard dir is not watched
+			utils.MakeFile(t, dir, "foo/wildonez/hoo.js", "1", 20)
+			select {
+			case <-w.Events:
+				So("Failed - Dir should not be observed", ShouldBeNil)
+			default:
+				So("Passed - Dir not observed", ShouldNotBeBlank)
+			}
+
+			// test newly created excluded wildcard dir is not watched
+			utils.MakeDir(t, dir+"/foo/wilder", 20)
+			utils.MakeFile(t, dir, "foo/wilder/whoa.js", "1", 20)
 			select {
 			case <-w.Events:
 				So("Failed - Dir should not be observed", ShouldBeNil)
@@ -145,11 +164,11 @@ func TestNewWatcher(t *testing.T) {
 
 			w := NewWatcher(&Config{
 				Dir:         dir,
-				IgnoreModes: []string{"chmod"},
+				IgnoreModes: []string{"write"},
 			})
 			<-w.Ready
 
-			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
+			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Write}
 			w.Watcher.Events <- evt
 			time.Sleep(time.Millisecond * 20)
 
@@ -161,7 +180,7 @@ func TestNewWatcher(t *testing.T) {
 			}
 
 			// does not ignore if multi op
-			evt = fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod | fsnotify.Write}
+			evt = fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Create | fsnotify.Write}
 
 			w.Watcher.Events <- evt
 			time.Sleep(time.Millisecond * 20)
@@ -179,7 +198,7 @@ func TestNewWatcher(t *testing.T) {
 			w.IgnoreEvents = true
 			<-w.Ready
 
-			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
+			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Rename}
 			w.Watcher.Events <- evt
 			time.Sleep(time.Millisecond * 20)
 
@@ -210,7 +229,7 @@ func TestEventTiming(t *testing.T) {
 
 			evt := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Rename}
 			evt2 := fsnotify.Event{Name: dir + "/main.js", Op: fsnotify.Rename}
-			evt3 := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod}
+			evt3 := fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Remove}
 
 			w.Watcher.Events <- evt
 			w.Watcher.Events <- evt2
@@ -226,7 +245,7 @@ func TestEventTiming(t *testing.T) {
 
 			e = <-w.Events
 			So(e.Name, ShouldEqual, dir+"/index.js")
-			So(e.Op, ShouldEqual, fsnotify.Chmod)
+			So(e.Op, ShouldEqual, fsnotify.Remove)
 		})
 
 		Convey("Multple identical events > 100ms apart are considered separate", func() {

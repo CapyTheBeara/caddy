@@ -126,7 +126,6 @@ func TestSimpleTask(t *testing.T) {
 			default:
 				So("Pass - task was prevented", ShouldNotBeBlank)
 			}
-
 		})
 	})
 }

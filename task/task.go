@@ -4,6 +4,7 @@ import (
 	// "bufio"
 	// "errors"
 	// "io"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -38,10 +39,11 @@ func Command(argStr string) *exec.Cmd {
 }
 
 type Opts struct {
-	Args      string
-	Dir       string
-	Timeout   time.Duration
-	UsePipeIO bool
+	Args          string
+	Dir           string
+	Timeout       time.Duration
+	UsePipeIO     bool
+	NoClearScreen bool
 }
 
 func NewSimpleTask(opts *Opts) *Task {
@@ -104,6 +106,11 @@ func (t *Task) listen() {
 	for {
 		in := <-t.In
 		t.createCommand(in)
+
+		if !t.NoClearScreen {
+			fmt.Print("\033[2J\033[0;0H")
+		}
+
 		t.BeforeRun(in)
 
 		if t.ShouldRun {

@@ -17,8 +17,6 @@ func NewTask(w *watcher.Watcher, opts *task.Opts) (t *task.Task) {
 	t.BeforeRun = func(path []byte) {
 		w.IgnoreEvents = true
 
-		fmt.Print("\033[2J\033[0;0H")
-
 		dir := filepath.Dir(string(path))
 
 		if !hasTestFiles(dir) {
