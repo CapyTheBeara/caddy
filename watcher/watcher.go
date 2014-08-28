@@ -12,6 +12,14 @@ import (
 
 var zeroTime = time.Now()
 
+var mapStringOp = map[string]fsnotify.Op{
+	"create": fsnotify.Create,
+	"write":  fsnotify.Write,
+	"remove": fsnotify.Remove,
+	"rename": fsnotify.Rename,
+	"chmod":  fsnotify.Chmod,
+}
+
 func NewWatcher(c *Config) *Watcher {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -55,6 +63,20 @@ type Watcher struct {
 	events       map[string]time.Time
 }
 
+func (w *Watcher) IsWatchingDir(dir string) bool {
+	for _, excl := range w.ExcludeDirs {
+		abs, err := filepath.Abs(filepath.Join(w.Dir, excl))
+		if err != nil {
+			log.Println("[error] Unable to get absolute path", err)
+			return false
+		}
+		if dir == abs {
+			return false
+		}
+	}
+	return true
+}
+
 func (w *Watcher) watchDir() {
 	if len(w.FileNames) == 0 {
 		filepath.Walk(w.Dir, func(path string, info os.FileInfo, err error) error {
@@ -63,12 +85,13 @@ func (w *Watcher) watchDir() {
 			}
 
 			if info.IsDir() {
+
 				hit := false
 				for _, d := range w.ExcludeDirs {
 					dir := filepath.Join(w.Dir, d)
 					if strings.HasPrefix(path, dir) {
 						hit = true
-						break
+						return filepath.SkipDir
 					}
 				}
 
@@ -96,6 +119,10 @@ func (w *Watcher) listen() {
 	for {
 		select {
 		case e := <-w.Watcher.Events:
+
+			/////////////////////////////
+			// log.Println(e)
+
 			if w.isDuplicateEvent(e) {
 				continue
 			}
@@ -111,7 +138,7 @@ func (w *Watcher) listen() {
 				continue
 			}
 
-			if w.isWatching(e) {
+			if w.isWatchingEvent(e) {
 				go func() {
 					w.Events <- e
 				}()
@@ -148,14 +175,14 @@ func (w *Watcher) shouldIgnore(e fsnotify.Event) bool {
 	}
 
 	for _, field := range w.IgnoreModes {
-		if strings.Contains(e.String(), strings.ToTitle(field)) {
+		if e.Op == mapStringOp[field] {
 			return true
 		}
 	}
 	return false
 }
 
-func (w *Watcher) isWatching(e fsnotify.Event) bool {
+func (w *Watcher) isWatchingEvent(e fsnotify.Event) bool {
 	if len(w.FileNames) == 0 {
 		if w.Ext == "" {
 			return true

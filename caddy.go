@@ -2,10 +2,10 @@ package main
 
 import (
 	"log"
-	"os"
 
 	"github.com/monocle/caddy/gotest"
-	"github.com/monocle/caddy/plugin"
+	"github.com/monocle/caddy/task"
+	"github.com/monocle/caddy/watcher"
 )
 
 func main() {
@@ -13,13 +13,35 @@ func main() {
 
 	println("Running...")
 
-	if len(os.Args) == 1 {
-		gotest.Run()
-	} else {
-		c := plugin.NewPlugin(os.Args[1:])
-		if err := c.RunWithStdIO(); err != nil {
-			log.Fatal(err)
-		}
+	goWatcher := watcher.NewWatcher(&watcher.Config{
+		Dir:         ".",
+		Ext:         "go",
+		ExcludeDirs: []string{".git"},
+		IgnoreModes: []string{"chmod"},
+	})
 
+	gotestTask := gotest.NewTask(goWatcher, &task.Opts{
+		Args:    "go test",
+		Timeout: 5,
+	})
+
+	jsWatcher := watcher.NewWatcher(&watcher.Config{
+		Dir:         ".",
+		Ext:         "js",
+		ExcludeDirs: []string{".git"},
+		IgnoreModes: []string{"chmod"},
+	})
+
+	jshintTask := task.NewSimpleTask(&task.Opts{
+		Args: "jshint {{fileName}}",
+	})
+
+	for {
+		select {
+		case e := <-goWatcher.Events:
+			gotestTask.In <- []byte(e.Name)
+		case e := <-jsWatcher.Events:
+			jshintTask.In <- []byte(e.Name)
+		}
 	}
 }

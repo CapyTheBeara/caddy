@@ -159,6 +159,15 @@ func TestNewWatcher(t *testing.T) {
 			default:
 				So("Passes - no event processed", ShouldNotBeBlank)
 			}
+
+			// does not ignore if multi op
+			evt = fsnotify.Event{Name: dir + "/index.js", Op: fsnotify.Chmod | fsnotify.Write}
+
+			w.Watcher.Events <- evt
+			time.Sleep(time.Millisecond * 20)
+
+			<-w.Events
+			So("Passes - event processed", ShouldNotBeBlank)
 		})
 
 		Convey("Events can be ignored via a toggle", func() {
