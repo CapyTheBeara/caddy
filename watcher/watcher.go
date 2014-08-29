@@ -35,12 +35,12 @@ func NewWatcher(c *Config) *Watcher {
 	}
 
 	w := Watcher{
-		Watcher: fsw,
-		Config:  *c,
-		Ready:   make(chan bool),
-		Events:  make(chan fsnotify.Event),
-		Errors:  make(chan error),
-		events:  make(map[string]time.Time),
+		Watcher:   fsw,
+		Config:    *c,
+		Ready:     make(chan bool),
+		Events:    make(chan fsnotify.Event),
+		Errors:    make(chan error),
+		eventsMap: make(map[string]time.Time),
 	}
 
 	w.watchDirs()
@@ -64,7 +64,22 @@ type Watcher struct {
 	Ready        chan bool
 	Events       chan fsnotify.Event
 	Errors       chan error
-	events       map[string]time.Time
+	eventsMap    map[string]time.Time
+}
+
+type Tasks interface {
+	Notify(string)
+}
+
+func (w *Watcher) Watch(tasks Tasks) {
+	for {
+		select {
+		case e := <-w.Events:
+			tasks.Notify(e.Name)
+		case err := <-w.Errors:
+			log.Println("[watch error]", err)
+		}
+	}
 }
 
 func (w *Watcher) IsWatchingDir(dir string) bool {
@@ -81,6 +96,7 @@ func (w *Watcher) IsWatchingDir(dir string) bool {
 			if strings.Contains(abs, substr) {
 				return false
 			}
+			continue
 		}
 
 		absExcl, err := filepath.Abs(filepath.Join(w.Dir, excl))
@@ -100,7 +116,7 @@ func (w *Watcher) watchDirs() {
 	if len(w.FileNames) == 0 {
 		filepath.Walk(w.Dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				log.Fatalln("[error] Couldn't watch folder:", err)
+				log.Fatalln("[watcher error]", err)
 			}
 
 			if info.IsDir() {
@@ -160,9 +176,9 @@ func (w *Watcher) listen() {
 
 func (w *Watcher) isDuplicateEvent(e fsnotify.Event) bool {
 	now := time.Now()
-	prev := w.events[e.String()]
+	prev := w.eventsMap[e.String()]
 	ignore := prev != zeroTime && now.Sub(prev).Seconds() < w.EventCutoff
-	w.events[e.String()] = now
+	w.eventsMap[e.String()] = now
 	return ignore
 }
 
@@ -187,7 +203,8 @@ func (w *Watcher) isNewDir(e fsnotify.Event) bool {
 	if e.Op == fsnotify.Create {
 		fi, err := os.Stat(e.Name)
 		if err != nil {
-			log.Fatal("[error] Unable to get file info:", err)
+			log.Println("[error] Unable to get file info:", err)
+			return false
 		}
 
 		if fi.IsDir() {
