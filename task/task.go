@@ -1,9 +1,8 @@
 package task
 
 import (
-	// "bufio"
-	// "errors"
-	// "io"
+	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -46,225 +45,245 @@ type Opts struct {
 	NoClearScreen bool
 }
 
-func NewSimpleTask(opts *Opts) *Task {
-	t := &Task{
-		Opts:      opts,
-		In:        make(chan []byte),
-		Done:      make(chan bool),
-		ShouldRun: true,
-		BeforeRun: func([]byte) {},
-		AfterRun:  func() {},
-	}
-
-	go t.listen()
-	return t
+type Task interface {
+	Input() chan []byte
+	Kill() error
+	Done() chan struct{}
 }
 
-type Task struct {
+type common struct {
 	*Opts
-	Cmd       *exec.Cmd
-	In        chan []byte
-	InPipe    io.WriteCloser
-	OutPipe   io.ReadCloser
-	ErrPipe   io.ReadCloser
-	Timeout   <-chan time.Time
-	Done      chan bool
-	ShouldRun bool
-	BeforeRun func([]byte)
-	AfterRun  func()
+	Cmd     *exec.Cmd
+	In      chan []byte
+	OutPipe io.ReadCloser
+	ErrPipe io.ReadCloser
 }
 
-func (p *Task) Kill() error {
+func (c *common) Input() chan []byte {
+	return c.In
+}
+
+func (p *common) Kill() error {
 	return p.Cmd.Process.Kill()
 }
 
-func (t *Task) createCommand(input []byte) {
-	t.Args = strings.Replace(t.Args, "{{fileName}}", string(input), -1)
+func (t *common) addStdOutErr() {
+	t.Cmd.Stdout = os.Stdout
+	t.Cmd.Stderr = os.Stderr
+}
 
-	cmd := Command(t.Args)
-	t.Cmd = cmd
+func (t *common) addPipeOutErr() {
+	out, err := t.Cmd.StdoutPipe()
+	if err != nil {
+		log.Fatal("[error] Problem obtaining StdoutPipe", err)
+	}
+	t.OutPipe = out
+	errPipe, err := t.Cmd.StderrPipe()
+	if err != nil {
+		log.Fatal("[error] Problem obtaining StderrPipe", err)
+	}
+	t.ErrPipe = errPipe
+}
+
+func NewSingleTask(opts *Opts) *SingleTask {
+	if opts.Timeout == 0 {
+		opts.Timeout = 600
+	}
+	t := &SingleTask{
+		common: common{
+			Opts: opts,
+			In:   make(chan []byte),
+		},
+		Success:   make(chan struct{}),
+		Errors:    make(chan error),
+		ShouldRun: true,
+		BeforeRun: func([]byte) {},
+		OnSuccess: func() {},
+		OnError:   func(error) {},
+		OnTimeout: func() {},
+		OnDone:    func() {},
+	}
+
+	go t.runCommand()
+	return t
+}
+
+type SingleTask struct {
+	common
+	Success   chan struct{}
+	Errors    chan error
+	done      chan struct{}
+	ShouldRun bool
+	BeforeRun func([]byte)
+	OnSuccess func()
+	OnError   func(error)
+	OnTimeout func()
+	OnDone    func()
+}
+
+func (t *SingleTask) Done() chan struct{} {
+	return t.done
+}
+
+func (t *SingleTask) createCommand(input []byte) {
+	t.Args = strings.Replace(t.Args, "{{fileName}}", string(input), -1)
+	t.Cmd = Command(t.Args)
 
 	if !t.UsePipeIO {
-		t.Cmd.Stdout = os.Stdout
-		t.Cmd.Stderr = os.Stderr
+		t.addStdOutErr()
 	} else {
-		out, err := cmd.StdoutPipe()
-		if err != nil {
-			log.Fatal("[error] Problem obtaining StdoutPipe", err)
-		}
-		t.OutPipe = out
-
-		errPipe, err := cmd.StderrPipe()
-		if err != nil {
-			log.Fatal("[error] Problem obtaining StderrPipe", err)
-		}
-		t.ErrPipe = errPipe
+		t.addPipeOutErr()
 	}
 }
 
-func (t *Task) listen() {
+func (t *SingleTask) runCommand() {
 	for {
 		in := <-t.In
-		t.createCommand(in)
-
-		if !t.NoClearScreen {
-			fmt.Print("\033[2J\033[0;0H")
-		}
-
-		t.BeforeRun(in)
+		t.done = make(chan struct{})
 
 		if t.ShouldRun {
-			t.Timeout = time.After(time.Second * t.Opts.Timeout)
+			if !t.NoClearScreen {
+				fmt.Print("\033[2J\033[0;0H")
+			}
+
+			t.createCommand(in)
+			t.BeforeRun(in)
 
 			go func() {
-				t.Cmd.Run() // ? what to do with error
-				t.Done <- true
+				// log.Println("1", t.Cmd.Args)
+				err := t.Cmd.Run()
+				// log.Println("2", t.Cmd.Args)
+				if err != nil {
+					t.Errors <- err
+					return
+				}
+				t.Success <- struct{}{}
 			}()
 
-			t.AfterRun()
+			select {
+			case <-t.Success:
+				t.OnSuccess()
+			case err := <-t.Errors:
+				t.OnError(err)
+			case <-time.After(time.Second * t.Opts.Timeout):
+				t.OnTimeout()
+			}
+		}
+		t.OnDone()
+		close(t.done)
+	}
+}
+
+func NewMultiTask(opts *Opts) *MultiTask {
+	cmd := Command(opts.Args)
+
+	t := &MultiTask{
+		common: common{
+			Cmd:  cmd,
+			Opts: opts,
+			In:   make(chan []byte),
+		},
+
+		Out:    make(chan []byte),
+		Errors: make(chan error),
+	}
+
+	t.addPipeIn()
+	t.addPipeOutErr()
+	go t.listen()
+
+	cmd.Start()
+	return t
+}
+
+type MultiTask struct {
+	common
+	inPipe io.WriteCloser
+	Out    chan []byte
+	Errors chan error
+}
+
+func (t *MultiTask) addPipeIn() {
+	in, err := t.Cmd.StdinPipe()
+	if err != nil {
+		log.Fatal("[error] Problem obtaining StdinPipe", err)
+	}
+	t.inPipe = in
+}
+
+func (t *MultiTask) listen() {
+	res := make(chan []byte)
+	errc := make(chan []byte)
+
+	for {
+		in := <-t.In
+
+		_, err := t.inPipe.Write(in)
+		if err != nil {
+			log.Println("[error] problem writing to StdinPipe", err)
+			continue
+		}
+
+		quit := make(chan struct{})
+		go readPipe(t.OutPipe, res, quit)
+		go readPipe(t.ErrPipe, errc, quit)
+
+		select {
+		case p := <-res:
+			t.Out <- p
+		case p := <-errc:
+			t.Errors <- errors.New(string(p))
+		}
+		close(quit)
+	}
+}
+
+func readPipe(pipe io.ReadCloser, res chan []byte, quit chan struct{}) {
+	select {
+	case <-quit:
+	default:
+		res <- []byte(readFromBuf(pipe))
+	}
+}
+
+func readFromBuf(rd io.Reader) string {
+	buf := bufio.NewReader(rd)
+	res := []string{}
+
+	for {
+		out, err := buf.ReadString('\n')
+		if err != nil && err != io.EOF {
+			log.Fatal("Output buffer read", err)
+			return ""
+		}
+
+		remaining := buf.Buffered()
+
+		if err == io.EOF && remaining == 0 {
+			return ""
+		}
+
+		trim := strings.TrimSpace(out)
+		if trim != "" {
+			res = append(res, trim)
+		}
+
+		if remaining == 0 && len(res) > 0 {
+			return strings.Join(res, "\n")
 		}
 	}
 }
 
-// func NewTask() *Task {
-// 	t := &Task{
-// 		// Cmd: cmd,
+func NewTasks(ts []Task) *Tasks {
+	return &Tasks{ts}
+}
 
-// 		OnDone:  func() {},
-// 		OnError: func(error) {},
+type Tasks struct {
+	content []Task
+}
 
-// 		Done:   make(chan bool),
-// 		Errors: make(chan error),
-
-// 		Timeout: 600,
-// 	}
-
-// 	return t
-// }
-
-// type Task struct {
-// 	Cmd *exec.Cmd
-
-// 	OnDone  func()
-// 	OnError func(error)
-
-// 	In      chan string
-// 	Out     chan string
-// 	Errors  chan error
-// 	Done    chan bool
-// 	Timeout time.Duration
-
-// 	inPipe io.WriteCloser
-// 	outBuf *bufio.Reader
-// 	errBuf *bufio.Reader
-// }
-
-// // TODO test this
-// func (p *Task) RunWithStdIO() {
-// 	p.Cmd.Stdin = os.Stdin
-// 	p.Cmd.Stdout = os.Stdout
-// 	p.Cmd.Stderr = os.Stderr
-
-// 	go func() {
-// 		if err := p.Cmd.Run(); err != nil {
-// 			p.Errors <- err
-// 		} else {
-// 			close(p.Done)
-// 		}
-// 	}()
-
-// 	select {
-// 	case <-p.Done:
-// 		p.OnDone()
-// 	case err := <-p.Errors:
-// 		p.OnError(err)
-// 	case <-time.After(time.Second * p.Timeout):
-// 		log.Println("[info] Long run detected. Halting.")
-// 		if err := p.Kill(); err != nil {
-// 			log.Fatal("[error]", err)
-// 		}
-// 	}
-// }
-
-// func (p *Task) RunWithPipeIO() error {
-// 	in, err := p.Cmd.StdinPipe()
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	out, err := p.Cmd.StdoutPipe()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	outBuf := bufio.NewReader(out)
-
-// 	e, err := p.Cmd.StderrPipe()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	errBuf := bufio.NewReader(e)
-
-// 	p.In = make(chan string)
-// 	p.Out = make(chan string)
-// 	p.inPipe = in
-// 	p.outBuf = outBuf
-// 	p.errBuf = errBuf
-
-// 	go p.listenIn()
-// 	return p.Cmd.Start()
-// }
-
-// func (p *Task) listenIn() {
-// 	for {
-// 		in := <-p.In
-
-// 		_, err := p.inPipe.Write([]byte(in))
-// 		logFatal("inPipe write", err)
-
-// 		go p.listenOutBuf()
-// 		go p.listenErrBuf()
-// 	}
-// }
-
-// func (p *Task) listenOutBuf() {
-// 	str := p.readFromBuf(p.outBuf)
-// 	p.Out <- str
-// }
-
-// func (p *Task) listenErrBuf() {
-// 	str := p.readFromBuf(p.errBuf)
-// 	p.Errors <- errors.New(str)
-// }
-
-// func (p *Task) readFromBuf(buf *bufio.Reader) string {
-// 	res := []string{}
-
-// 	for {
-// 		out, err := buf.ReadString('\n')
-// 		if err != nil && err != io.EOF {
-// 			logFatal("Output buffer read", err)
-// 			return ""
-// 		}
-
-// 		remaining := buf.Buffered()
-
-// 		if err == io.EOF && remaining == 0 {
-// 			return ""
-// 		}
-
-// 		trim := strings.TrimSpace(out)
-// 		if trim != "" {
-// 			res = append(res, trim)
-// 		}
-
-// 		if remaining == 0 && len(res) > 0 {
-// 			return strings.Join(res, "\n")
-// 		}
-// 	}
-// }
-
-func logFatal(msg string, err error) {
-	if err != nil {
-		log.Fatal(msg+" error:", err)
+func (t *Tasks) Notify(msg string) {
+	for _, task := range t.content {
+		task.Input() <- []byte(msg)
 	}
 }

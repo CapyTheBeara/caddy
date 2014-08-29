@@ -37,7 +37,10 @@ func NewTask(w *watcher.Watcher, opts *task.Opts) (t *task.Task) {
 
 		case <-t.Timeout:
 			log.Println("Timed out. Halting run.")
-			t.Kill()
+			err := t.Kill()
+			if err != nil {
+				log.Println("[error] Unable to halt test run.", err)
+			}
 		}
 		w.IgnoreEvents = false
 	}
