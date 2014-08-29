@@ -11,8 +11,20 @@ import (
 	"github.com/monocle/caddy/watcher"
 )
 
-func NewTask(w *watcher.Watcher, opts *task.Opts) (t *task.Task) {
-	t = task.NewSimpleTask(opts)
+var baseDir string
+var runSimple *task.SingleTask
+
+func init() {
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Println("[error] Unable to get current working directory to run all tests", err)
+		return
+	}
+	baseDir = wd
+}
+
+func NewTask(w *watcher.Watcher, opts *task.Opts) (t *task.SingleTask) {
+	t = task.NewSingleTask(opts)
 
 	t.BeforeRun = func(path []byte) {
 		w.IgnoreEvents = true
@@ -27,24 +39,23 @@ func NewTask(w *watcher.Watcher, opts *task.Opts) (t *task.Task) {
 		t.Cmd.Dir = dir
 	}
 
-	t.AfterRun = func() {
-		select {
-		case <-t.Done:
-			if t.Cmd.Args[1] == "build" {
-				fmt.Println("Build successful.")
-			}
-			// dirs := findTestDirs(w)
-
-		case <-t.Timeout:
-			log.Println("Timed out. Halting run.")
-			err := t.Kill()
-			if err != nil {
-				log.Println("[error] Unable to halt test run.", err)
-			}
+	t.OnSuccess = func() {
+		if t.Cmd.Args[1] == "build" {
+			fmt.Println("Build check complete.")
 		}
+		runAll(w, t.Cmd.Dir)
+	}
+
+	t.OnTimeout = func() {
+		killTask(t)
+	}
+
+	t.OnDone = func() {
 		w.IgnoreEvents = false
 	}
 
+	runSimple = createRunSimple(w, opts)
+	runAll(w, "")
 	return t
 }
 
@@ -67,25 +78,57 @@ func hasTestFiles(dir string) bool {
 	if err != nil {
 		log.Println("[error] finding test files:", err)
 	}
+
 	return yes
 }
 
-func findTestDirs(w *watcher.Watcher) []string {
-	dirs := []string{}
-	wd, err := os.Getwd()
+func killTask(t *task.SingleTask) {
+	log.Println("Timed out. Halting run.")
+	err := t.Kill()
 	if err != nil {
-		log.Println("[error] Unable to get current working directory", err)
-		return dirs
+		log.Println("[error] Unable to halt test run.", err)
+	}
+}
+
+func createRunSimple(w *watcher.Watcher, opts *task.Opts) *task.SingleTask {
+	t := task.NewSingleTask(opts)
+
+	t.BeforeRun = func(path []byte) {
+		w.IgnoreEvents = true
+		t.Cmd.Dir = string(path)
 	}
 
-	err = filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
-		if info.IsDir() && w.IsWatchingDir(path) && hasTestFiles(path) {
-			dirs = append(dirs, path)
+	t.OnTimeout = func() {
+		killTask(t)
+	}
+
+	t.OnDone = func() {
+		w.IgnoreEvents = false
+	}
+
+	return t
+}
+
+func runAll(w *watcher.Watcher, skip string) {
+	t := runSimple
+	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
+		absSkip, err := filepath.Abs(skip)
+		if err != nil {
+			log.Println("[error] Unable to get absolute path", err)
+		}
+
+		if info.IsDir() && w.IsWatchingDir(path) && hasTestFiles(path) && path != absSkip {
+			t.NoClearScreen = true
+			t.In <- []byte(path)
+			t.NoClearScreen = false
+		} else {
+			if path != baseDir && info.IsDir() {
+				return filepath.SkipDir
+			}
 		}
 		return err
 	})
 	if err != nil {
 		log.Println("[error] Unable to find test directories:", err)
 	}
-	return dirs
 }

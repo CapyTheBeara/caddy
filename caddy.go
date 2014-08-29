@@ -11,17 +11,10 @@ import (
 func main() {
 	log.SetFlags(log.Lshortfile)
 
-	println("Running...")
-
 	goWatcher := watcher.NewWatcher(&watcher.Config{
 		Dir:         ".",
 		Ext:         "go",
 		ExcludeDirs: []string{".git", "tmp*", "node_module*"},
-	})
-
-	gotestTask := gotest.NewTask(goWatcher, &task.Opts{
-		Args:    "go test",
-		Timeout: 5,
 	})
 
 	jsWatcher := watcher.NewWatcher(&watcher.Config{
@@ -30,16 +23,17 @@ func main() {
 		ExcludeDirs: []string{".git", "tmp*", "node_module*"},
 	})
 
-	jshintTask := task.NewSimpleTask(&task.Opts{
+	goTask := gotest.NewTask(goWatcher, &task.Opts{
+		Args:    "go test",
+		Timeout: 5,
+	})
+
+	jsTask := task.NewSingleTask(&task.Opts{
 		Args: "jshint {{fileName}}",
 	})
 
-	for {
-		select {
-		case e := <-goWatcher.Events:
-			gotestTask.In <- []byte(e.Name)
-		case e := <-jsWatcher.Events:
-			jshintTask.In <- []byte(e.Name)
-		}
-	}
+	go goWatcher.Watch(task.NewTasks([]task.Task{goTask}))
+	go jsWatcher.Watch(task.NewTasks([]task.Task{jsTask}))
+
+	<-make(chan struct{})
 }
