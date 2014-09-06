@@ -55,6 +55,7 @@ func TestTerminatingCommand(t *testing.T) {
 			c := NewCommand(&Opts{
 				Args:          "echo -n {{fileName}}",
 				NoClearScreen: true,
+				NoStdout:      true,
 			})
 			c.Stdout = &buf
 
@@ -72,6 +73,8 @@ func TestTerminatingCommand(t *testing.T) {
 			c := NewCommand(&Opts{
 				Args:          "test_commands/error.go",
 				NoClearScreen: true,
+				NoStdout:      true,
+				IgnoreErrors:  true,
 			})
 			c.Stderr = &buf
 
@@ -86,6 +89,7 @@ func TestTerminatingCommand(t *testing.T) {
 				Args:          "sleep 1",
 				Timeout:       -1,
 				NoClearScreen: true,
+				NoStdout:      true,
 			})
 
 			c.Events <- &testEvent{"foo.go"}
@@ -101,6 +105,7 @@ func TestBlockingCommand(t *testing.T) {
 			Args:          "test_commands/node.js",
 			Blocking:      true,
 			NoClearScreen: true,
+			NoStdout:      true,
 		})
 
 		Convey("Sending an Event input runs the command", func() {
@@ -122,6 +127,7 @@ func TestBlockingCommand(t *testing.T) {
 				Args:          "test_commands/node.js",
 				Delim:         "__DONE__",
 				NoClearScreen: true,
+				NoStdout:      true,
 			})
 
 			buf := bytes.Buffer{}

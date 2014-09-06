@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,11 +35,12 @@ func parseCmdArgs(argStr string, ev Event) (string, []string) {
 type Opts struct {
 	Args          string
 	NoClearScreen bool
+	IgnoreErrors  bool
 	Timeout       time.Duration
 
-	Delim     string
-	Blocking  bool
-	UseStdout bool
+	Delim    string
+	Blocking bool
+	NoStdout bool
 }
 
 func NewCommand(opts *Opts) (c *Cmd) {
@@ -96,7 +98,7 @@ func (c *Cmd) listen() {
 			cmd.Stderr = c.Stderr
 
 			c.Cmd = cmd
-			if c.UseStdout {
+			if !c.NoStdout {
 				c.useOsStdout()
 			}
 
@@ -177,7 +179,7 @@ func (c *Cmd) listenBlocking() {
 	inPipe, err := c.Cmd.StdinPipe()
 	c.checkError(err)
 
-	if c.UseStdout {
+	if !c.NoStdout {
 		c.useOsStdout()
 	} else {
 		c.checkError(c.useStdoutPipe())
@@ -229,9 +231,13 @@ func (c *Cmd) useStdoutPipe() error {
 
 func (c *Cmd) checkError(err error) bool {
 	if err != nil {
+		if !c.IgnoreErrors {
+			log.Println("[error]", err)
+		}
 		go func() {
 			c.Errors <- err
 		}()
+
 		return true
 	}
 	return false
