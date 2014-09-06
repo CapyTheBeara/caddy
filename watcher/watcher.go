@@ -55,6 +55,7 @@ type Config struct {
 	IgnoreModes []string
 	ExcludeDirs []string
 	EventCutoff float64
+	Commands    []string
 }
 
 type Watcher struct {

@@ -3,50 +3,40 @@ package main
 import (
 	"log"
 
-	"github.com/monocle/caddy/command"
-	"github.com/monocle/caddy/watcher"
+	"github.com/monocle/caddy/config"
 )
+
+const jsonConf = `
+	{
+		"commands": [
+			{
+				"args": "gotest/gotest.go",
+				"blocking": true
+			},
+			{
+				"args": "jshint {{fileName}}",
+				"ignoreErrors": true
+			}
+		],
+		"watchers": [
+			{
+				"dir": ".",
+				"ext": "go",
+				"excludeDirs": [".git", "tmp*", "node_module*"],
+				"commands": ["gotest/gotest.go"]
+			},
+			{
+				"dir": ".",
+				"ext": "js",
+				"excludeDirs": [".git", "tmp*", "node_module*"],
+				"commands": ["jshint {{fileName}}"]
+			}
+		]
+	}
+`
 
 func main() {
 	log.SetFlags(log.Lshortfile)
-
-	goWatcher := watcher.NewWatcher(&watcher.Config{
-		Dir:         ".",
-		Ext:         "go",
-		ExcludeDirs: []string{".git", "tmp*", "node_module*"},
-	})
-
-	jsWatcher := watcher.NewWatcher(&watcher.Config{
-		Dir:         ".",
-		Ext:         "js",
-		ExcludeDirs: []string{".git", "tmp*", "node_module*"},
-	})
-
-	goCommand := command.NewCommand(&command.Opts{
-		Args:      "gotest/gotest.go",
-		Blocking:  true,
-		UseStdout: true,
-	})
-
-	jsCommand := command.NewCommand(&command.Opts{
-		Args:      "jshint {{fileName}}",
-		UseStdout: true,
-	})
-
-	go func() {
-		for {
-			select {
-			case err := <-goCommand.Errors:
-				log.Println("[error] go test", err)
-				// if watcher.SupressCommandErrors
-				// case err := <-jsCommand.Errors:
-				// log.Println("[error] jshint ", err)
-			}
-		}
-	}()
-
-	go goWatcher.AddCommands(command.NewCommands([]*command.Cmd{goCommand}))
-	go jsWatcher.AddCommands(command.NewCommands([]*command.Cmd{jsCommand}))
-
+	config.ParseConfig([]byte(jsonConf))
 	<-make(chan struct{})
 }
