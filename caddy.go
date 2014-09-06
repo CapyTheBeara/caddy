@@ -3,8 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/monocle/caddy/gotest"
-	"github.com/monocle/caddy/task"
+	"github.com/monocle/caddy/command"
 	"github.com/monocle/caddy/watcher"
 )
 
@@ -23,17 +22,31 @@ func main() {
 		ExcludeDirs: []string{".git", "tmp*", "node_module*"},
 	})
 
-	goTask := gotest.NewTask(goWatcher, &task.Opts{
-		Args:    "go test",
-		Timeout: 5,
+	goCommand := command.NewCommand(&command.Opts{
+		Args:      "gotest/gotest.go",
+		Blocking:  true,
+		UseStdout: true,
 	})
 
-	jsTask := task.NewSingleTask(&task.Opts{
-		Args: "jshint {{fileName}}",
+	jsCommand := command.NewCommand(&command.Opts{
+		Args:      "jshint {{fileName}}",
+		UseStdout: true,
 	})
 
-	go goWatcher.Watch(task.NewTasks([]task.Task{goTask}))
-	go jsWatcher.Watch(task.NewTasks([]task.Task{jsTask}))
+	go func() {
+		for {
+			select {
+			case err := <-goCommand.Errors:
+				log.Println("[error] go test", err)
+				// if watcher.SupressCommandErrors
+				// case err := <-jsCommand.Errors:
+				// log.Println("[error] jshint ", err)
+			}
+		}
+	}()
+
+	go goWatcher.AddCommands(command.NewCommands([]*command.Cmd{goCommand}))
+	go jsWatcher.AddCommands(command.NewCommands([]*command.Cmd{jsCommand}))
 
 	<-make(chan struct{})
 }
