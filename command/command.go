@@ -66,6 +66,19 @@ func NewCommand(opts *Opts) (c *Cmd) {
 	return
 }
 
+type Cmd struct {
+	*Opts
+	*exec.Cmd
+	Errors     chan error
+	Events     chan Event
+	Done       chan struct{}
+	Timeout    chan time.Duration
+	DidTimeout bool
+
+	OutPipe io.ReadCloser
+	ErrPipe io.ReadCloser
+}
+
 func (c *Cmd) listen() {
 	c.Errors = make(chan error)
 	c.Timeout = make(chan time.Duration)
@@ -81,7 +94,11 @@ func (c *Cmd) listen() {
 			cmd := exec.Command(name, args...)
 			cmd.Stdout = c.Stdout
 			cmd.Stderr = c.Stderr
+
 			c.Cmd = cmd
+			if c.UseStdout {
+				c.useOsStdout()
+			}
 
 			done := make(chan struct{})
 
@@ -95,22 +112,17 @@ func (c *Cmd) listen() {
 			case <-time.After(time.Second * c.Opts.Timeout):
 				c.DidTimeout = true
 			}
-			c.Done <- struct{}{}
+
+			go func() {
+				c.Done <- struct{}{}
+			}()
 		}
 	}()
 }
 
-type Cmd struct {
-	*Opts
-	*exec.Cmd
-	Errors     chan error
-	Events     chan Event
-	Done       chan struct{}
-	Timeout    chan time.Duration
-	DidTimeout bool
-
-	OutPipe io.ReadCloser
-	ErrPipe io.ReadCloser
+func (c *Cmd) useOsStdout() {
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
 }
 
 func (c *Cmd) ReadOutPipe() []byte {
@@ -166,8 +178,7 @@ func (c *Cmd) listenBlocking() {
 	c.checkError(err)
 
 	if c.UseStdout {
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
+		c.useOsStdout()
 	} else {
 		c.checkError(c.useStdoutPipe())
 	}

@@ -144,19 +144,3 @@ func TestBlockingCommand(t *testing.T) {
 		})
 	})
 }
-
-// func TestFoo(t *testing.T) {
-// 	opts := &Opts{
-// 		Args:          "../gotest/gotest.go",
-// 		Blocking:      true,
-// 		UseStdout:     true,
-// 		NoClearScreen: true,
-// 	}
-
-// 	cmd := NewCommand(opts)
-
-// 	cmd.Events <- &event{"../watcher/watcher.go"}
-// 	cmd.Events <- &event{"../task/task.go"}
-
-// 	time.Sleep(time.Second * 2)
-// }
