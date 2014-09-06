@@ -67,15 +67,15 @@ type Watcher struct {
 	eventsMap    map[string]time.Time
 }
 
-type Tasks interface {
-	Notify(string)
+type Commands interface {
+	Run(string)
 }
 
-func (w *Watcher) Watch(tasks Tasks) {
+func (w *Watcher) AddCommands(commands Commands) {
 	for {
 		select {
 		case e := <-w.Events:
-			tasks.Notify(e.Name)
+			commands.Run(e.Name)
 		case err := <-w.Errors:
 			log.Println("[watch error]", err)
 		}

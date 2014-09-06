@@ -1,4 +1,4 @@
-package watcher
+package command
 
 import (
 	"bytes"
@@ -47,13 +47,14 @@ func TestParseCmdArgs(t *testing.T) {
 	})
 }
 
-func TestNewCommand(t *testing.T) {
-	Convey("Given a command that runs to completion", t, func() {
+func TestTerminatingCommand(t *testing.T) {
+	Convey("Given a command that terminates", t, func() {
 		buf := bytes.Buffer{}
 
 		Convey("Sending an Event input runs the command", func() {
 			c := NewCommand(&Opts{
-				Args: "echo -n {{fileName}}",
+				Args:          "echo -n {{fileName}}",
+				NoClearScreen: true,
 			})
 			c.Stdout = &buf
 
@@ -69,7 +70,8 @@ func TestNewCommand(t *testing.T) {
 
 		Convey("Errors can be captured", func() {
 			c := NewCommand(&Opts{
-				Args: "test_commands/error.go",
+				Args:          "test_commands/error.go",
+				NoClearScreen: true,
 			})
 			c.Stderr = &buf
 
@@ -81,8 +83,9 @@ func TestNewCommand(t *testing.T) {
 
 		Convey("Timeout can be set", func() {
 			c := NewCommand(&Opts{
-				Args:    "sleep 1",
-				Timeout: -1,
+				Args:          "sleep 1",
+				Timeout:       -1,
+				NoClearScreen: true,
 			})
 
 			c.Events <- &testEvent{"foo.go"}
@@ -90,11 +93,14 @@ func TestNewCommand(t *testing.T) {
 			So(c.DidTimeout, ShouldBeTrue)
 		})
 	})
+}
 
-	Convey("Given a command that uses pipes", t, func() {
+func TestBlockingCommand(t *testing.T) {
+	Convey("Given a command that blocks", t, func() {
 		c := NewCommand(&Opts{
-			Args:     "test_commands/node.js",
-			UsePipes: true,
+			Args:          "test_commands/node.js",
+			Blocking:      true,
+			NoClearScreen: true,
 		})
 
 		Convey("Sending an Event input runs the command", func() {
@@ -112,21 +118,24 @@ func TestNewCommand(t *testing.T) {
 		})
 
 		Convey("A delimeter can be used to help read output", func() {
+			c := NewCommand(&Opts{
+				Args:          "test_commands/node.js",
+				Delim:         "__DONE__",
+				NoClearScreen: true,
+			})
+
 			buf := bytes.Buffer{}
-			c.Opts.Delim = []byte("__DONE__")
 			c.Stdout = &buf
 
 			c.Events <- &testEvent{"console.log('foo');console.log('fooz__DONE__');"}
 			<-c.Done
 			So(buf.String(), ShouldEqual, "foo\nfooz\n")
 
-			// repeatable
 			buf.Reset()
 			c.Events <- &testEvent{"console.log('bar');console.log('barz__DONE__');"}
 			<-c.Done
 			So(buf.String(), ShouldEqual, "bar\nbarz\n")
 
-			// stderr works
 			buf.Reset()
 			c.Stderr = &buf
 			c.Events <- &testEvent{"process.stderr.write('errz__DONE__');"}
@@ -135,3 +144,19 @@ func TestNewCommand(t *testing.T) {
 		})
 	})
 }
+
+// func TestFoo(t *testing.T) {
+// 	opts := &Opts{
+// 		Args:          "../gotest/gotest.go",
+// 		Blocking:      true,
+// 		UseStdout:     true,
+// 		NoClearScreen: true,
+// 	}
+
+// 	cmd := NewCommand(opts)
+
+// 	cmd.Events <- &event{"../watcher/watcher.go"}
+// 	cmd.Events <- &event{"../task/task.go"}
+
+// 	time.Sleep(time.Second * 2)
+// }

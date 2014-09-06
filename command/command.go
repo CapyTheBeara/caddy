@@ -1,9 +1,11 @@
-package watcher
+package command
 
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -13,10 +15,6 @@ import (
 var commandMap = map[string][]string{
 	".go": []string{"go", "run"},
 	".js": []string{"node"},
-}
-
-type Event interface {
-	FileName() string
 }
 
 func parseCmdArgs(argStr string, ev Event) (string, []string) {
@@ -34,10 +32,72 @@ func parseCmdArgs(argStr string, ev Event) (string, []string) {
 }
 
 type Opts struct {
-	Args     string
-	Timeout  time.Duration
-	UsePipes bool
-	Delim    []byte
+	Args          string
+	NoClearScreen bool
+	Timeout       time.Duration
+
+	Delim     string
+	Blocking  bool
+	UseStdout bool
+}
+
+func NewCommand(opts *Opts) (c *Cmd) {
+	if opts.Timeout == 0 {
+		opts.Timeout = 600
+	}
+
+	if opts.Delim != "" {
+		opts.Blocking = true
+	}
+
+	c = &Cmd{
+		Cmd:    &exec.Cmd{},
+		Opts:   opts,
+		Events: make(chan Event),
+		Done:   make(chan struct{}),
+	}
+
+	if opts.Blocking {
+		c.listenBlocking()
+		return
+	}
+
+	c.listen()
+	return
+}
+
+func (c *Cmd) listen() {
+	c.Errors = make(chan error)
+	c.Timeout = make(chan time.Duration)
+
+	go func() {
+		for {
+			ev := <-c.Events
+			if !c.NoClearScreen {
+				fmt.Print("\033[2J\033[0;0H")
+			}
+
+			name, args := parseCmdArgs(c.Opts.Args, ev)
+			cmd := exec.Command(name, args...)
+			cmd.Stdout = c.Stdout
+			cmd.Stderr = c.Stderr
+			c.Cmd = cmd
+
+			done := make(chan struct{})
+
+			go func() {
+				c.checkError(c.Run())
+				done <- struct{}{}
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(time.Second * c.Opts.Timeout):
+				c.DidTimeout = true
+			}
+			c.Done <- struct{}{}
+		}
+	}()
 }
 
 type Cmd struct {
@@ -49,7 +109,6 @@ type Cmd struct {
 	Timeout    chan time.Duration
 	DidTimeout bool
 
-	inPipe  io.WriteCloser
 	OutPipe io.ReadCloser
 	ErrPipe io.ReadCloser
 }
@@ -63,24 +122,25 @@ func (c *Cmd) ReadErrPipe() []byte {
 }
 
 func (c *Cmd) readPipe(r io.ReadCloser) []byte {
+	bufr := bufio.NewReader(r)
+	p, err := readBufOnce(bufr)
+	c.checkError(err)
+	return p
+}
+
+func (c *Cmd) readPipeDelim(r io.ReadCloser) []byte {
 	res := []byte{}
 	bufr := bufio.NewReader(r)
 
 	for {
 		p, err := readBufOnce(bufr)
-		if err != nil {
-			println(err.Error())
-			c.Errors <- err
-			break
-		}
+		c.checkError(err)
+
 		res = append(res, p...)
 
-		if len(c.Delim) == 0 {
-			break
-		}
-
-		if bytes.Contains(res, c.Delim) {
-			res = bytes.Replace(res, c.Delim, []byte{}, 1)
+		delim := []byte(c.Delim)
+		if bytes.Contains(res, delim) {
+			res = bytes.Replace(res, delim, []byte{}, 1)
 			break
 		}
 	}
@@ -92,71 +152,56 @@ func readBufOnce(bufr *bufio.Reader) ([]byte, error) {
 	if err != nil {
 		return []byte{}, err
 	}
+
 	buf := make([]byte, bufr.Buffered())
 	bufr.Read(buf)
 	return buf, nil
 }
 
-func (c *Cmd) listen() {
-	for {
-		ev := <-c.Events
-		name, args := parseCmdArgs(c.Opts.Args, ev)
-		cmd := exec.Command(name, args...)
-		cmd.Stdout = c.Stdout
-		cmd.Stderr = c.Stderr
-		c.Cmd = cmd
+func (c *Cmd) listenBlocking() {
+	name, args := parseCmdArgs(c.Opts.Args, nil)
+	c.Cmd = exec.Command(name, args...)
 
-		done := make(chan struct{})
+	inPipe, err := c.Cmd.StdinPipe()
+	c.checkError(err)
 
-		go func() {
-			err := c.Run()
-			if err != nil {
-				c.Errors <- err
+	if c.UseStdout {
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+	} else {
+		c.checkError(c.useStdoutPipe())
+	}
+
+	c.Start()
+
+	go func() {
+		for {
+			ev := <-c.Events
+			if !c.NoClearScreen {
+				fmt.Print("\033[2J\033[0;0H")
 			}
-			done <- struct{}{}
-		}()
 
-		select {
-		case <-done:
-		case <-time.After(time.Second * c.Opts.Timeout):
-			c.DidTimeout = true
+			_, err := inPipe.Write([]byte(ev.FileName() + "\n"))
+			c.checkError(err)
+
+			if c.Delim != "" {
+				go func() {
+					res := c.readPipeDelim(c.OutPipe)
+					c.Stdout.Write(res)
+					c.Done <- struct{}{}
+				}()
+
+				go func() {
+					res := c.readPipeDelim(c.ErrPipe)
+					c.Stderr.Write(res)
+					c.Done <- struct{}{}
+				}()
+			}
 		}
-		c.Done <- struct{}{}
-	}
+	}()
 }
 
-func (c *Cmd) listenPipes() {
-	for {
-		ev := <-c.Events
-
-		_, err := c.inPipe.Write([]byte(ev.FileName()))
-		if err != nil {
-			c.Errors <- err
-		}
-
-		if len(c.Delim) > 0 {
-			go func() {
-				res := c.ReadOutPipe()
-				c.Stdout.Write(res)
-				c.Done <- struct{}{}
-			}()
-
-			go func() {
-				res := c.ReadErrPipe()
-				c.Stderr.Write(res)
-				c.Done <- struct{}{}
-			}()
-		}
-	}
-}
-
-func (c *Cmd) setupPipes() error {
-	in, err := c.Cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	c.inPipe = in
-
+func (c *Cmd) useStdoutPipe() error {
 	out, err := c.Cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -171,31 +216,12 @@ func (c *Cmd) setupPipes() error {
 	return nil
 }
 
-func NewCommand(opts *Opts) *Cmd {
-	if opts.Timeout == 0 {
-		opts.Timeout = 600
-	}
-	c := Cmd{
-		Cmd:     &exec.Cmd{},
-		Opts:    opts,
-		Events:  make(chan Event),
-		Errors:  make(chan error),
-		Done:    make(chan struct{}),
-		Timeout: make(chan time.Duration),
-	}
-
-	if opts.UsePipes {
-		name, args := parseCmdArgs(c.Opts.Args, nil)
-		c.Cmd = exec.Command(name, args...)
-		err := c.setupPipes()
-		if err != nil {
+func (c *Cmd) checkError(err error) bool {
+	if err != nil {
+		go func() {
 			c.Errors <- err
-		} else {
-			c.Start()
-			go c.listenPipes()
-		}
-	} else {
-		go c.listen()
+		}()
+		return true
 	}
-	return &c
+	return false
 }
