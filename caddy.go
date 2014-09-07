@@ -1,42 +1,19 @@
 package main
 
 import (
+	"io/ioutil"
 	"log"
 
 	"github.com/monocle/caddy/config"
 )
 
-const jsonConf = `
-	{
-		"commands": [
-			{
-				"args": "gotest/gotest.go",
-				"blocking": true
-			},
-			{
-				"args": "jshint {{fileName}}",
-				"ignoreErrors": true
-			}
-		],
-		"watchers": [
-			{
-				"dir": ".",
-				"ext": "go",
-				"excludeDirs": [".git", "tmp*", "node_module*"],
-				"commands": ["gotest/gotest.go"]
-			},
-			{
-				"dir": ".",
-				"ext": "js",
-				"excludeDirs": [".git", "tmp*", "node_module*"],
-				"commands": ["jshint {{fileName}}"]
-			}
-		]
-	}
-`
-
 func main() {
 	log.SetFlags(log.Lshortfile)
-	config.ParseConfig([]byte(jsonConf))
+
+	cfg, err := ioutil.ReadFile("caddy.json")
+	if err != nil {
+		log.Fatal("[error] Unable to redy caddy.json file")
+	}
+	config.ParseConfig(cfg)
 	<-make(chan struct{})
 }
